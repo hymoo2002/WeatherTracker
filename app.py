@@ -44,7 +44,7 @@ if menu == "Record a new observation":
     st.subheader("Record a New Weather Observation")
     with st.form("new_obs"):
         date_str = st.text_input("Date (DD-MM-YYYY)")
-        temperature = st.number_input("Temperature (°C)", format="%.1f")
+        temperature = st.number_input("Temperature (°C)", format="%.1f", step=0.5)
         condition = st.selectbox(
             "Weather condition",
             ["Sunny", "Cloudy", "Rainy", "Snowy", "Windy", "Foggy", "Stormy", "Other"],
