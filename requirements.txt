@@ -1,0 +1,6 @@
+matplotlib==3.11.0
+numpy==2.5.1
+pandas==3.0.3
+scipy==1.18.0
+sounddevice==0.5.5
+streamlit==1.58.0

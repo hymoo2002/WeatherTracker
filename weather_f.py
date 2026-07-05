@@ -10,13 +10,50 @@ import pandas as pd
 
 CSV_FILE = "weather_data.csv"
 COLUMNS = ["Date", "Temperature_C", "Condition", "Humidity_%", "Wind_Speed_kmh"]
-DATE_FORMAT = "%m-%d-%Y"
+DATE_FORMAT = "%d-%m-%Y"
+
+# Plain list used wherever we need month names (no lambda needed)
+MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
 
 
 # ---------- Core data I/O ----------
 
+def _migrate_old_dates(csv_path):
+    """
+    One-time migration: swap dates from the old MM-DD-YYYY layout
+    to the new DD-MM-YYYY layout.  A small marker file is written
+    next to the CSV so this only runs once.
+    """
+    marker = csv_path + ".migrated"
+    if os.path.exists(marker):
+        return                       # already migrated
+
+    # If a CSV with data exists, swap the first two parts of every date
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path, dtype={"Date": str})
+        if not df.empty and "Date" in df.columns:
+            new_dates = []
+            for d in df["Date"]:
+                parts = str(d).split("-")
+                if len(parts) == 3:
+                    # "MM-DD-YYYY" → "DD-MM-YYYY"
+                    new_dates.append(f"{parts[1]}-{parts[0]}-{parts[2]}")
+                else:
+                    new_dates.append(d)
+            df["Date"] = new_dates
+            df.to_csv(csv_path, index=False)
+
+    # Write marker so we never run this again
+    with open(marker, "w") as f:
+        f.write("done")
+
+
 def load_data(csv_path=CSV_FILE):
     """Load weather observations from CSV, creating an empty file if none exists."""
+    _migrate_old_dates(csv_path)     # convert old dates on first run
     if os.path.exists(csv_path):
         df = pd.read_csv(csv_path, dtype={"Date": str})
     else:
@@ -41,7 +78,7 @@ def save_observation(date_str, temperature, condition, humidity, wind_speed, csv
 
 
 def validate_date(date_str):
-    """Return a datetime object if date_str matches MM-DD-YYYY, else None."""
+    """Return a datetime object if date_str matches DD-MM-YYYY, else None."""
     try:
         return datetime.strptime(date_str, DATE_FORMAT)
     except (ValueError, TypeError):
@@ -161,7 +198,11 @@ def compare_years(df, year1, year2):
     y2 = dfd[dfd["Year"] == year2].groupby("Month")["Temperature_C"].mean()
 
     comparison = pd.DataFrame({str(year1): y1, str(year2): y2})
+
+    # Convert numeric month index (1-12) to readable month names
+    comparison.index = [MONTH_NAMES[m - 1] for m in comparison.index]
     comparison.index.name = "Month"
+
     comparison["Difference"] = comparison[str(year1)] - comparison[str(year2)]
     return comparison.round(2)
 
