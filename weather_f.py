@@ -19,40 +19,8 @@ MONTH_NAMES = [
 ]
 
 
-# ---------- Core data I/O ----------
-
-def _migrate_old_dates(csv_path):
-    """
-    One-time migration: swap dates from the old MM-DD-YYYY layout
-    to the new DD-MM-YYYY layout.  A small marker file is written
-    next to the CSV so this only runs once.
-    """
-    marker = csv_path + ".migrated"
-    if os.path.exists(marker):
-        return                       # already migrated
-
-    # If a CSV with data exists, swap the first two parts of every date
-    if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path, dtype={"Date": str})
-        if not df.empty and "Date" in df.columns:
-            new_dates = []
-            for d in df["Date"]:
-                parts = str(d).split("-")
-                if len(parts) == 3:
-                    # "MM-DD-YYYY" → "DD-MM-YYYY"
-                    new_dates.append(f"{parts[1]}-{parts[0]}-{parts[2]}")
-                else:
-                    new_dates.append(d)
-            df["Date"] = new_dates
-            df.to_csv(csv_path, index=False)
-
-    # Write marker so we never run this again
-    with open(marker, "w") as f:
-        f.write("done")
-
-
 def load_data(csv_path=CSV_FILE):
-    """Load weather observations from CSV, creating an empty file if none exists."""
+    #Load weather observations from CSV, creating an empty file if none exists.
     _migrate_old_dates(csv_path)     # convert old dates on first run
     if os.path.exists(csv_path):
         df = pd.read_csv(csv_path, dtype={"Date": str})
@@ -92,7 +60,7 @@ def _with_datetime(df):
     return df.dropna(subset=["Date_dt"])
 
 
-# ---------- Core features ----------
+# Core features
 
 def get_statistics(df):
     """Return avg/min/max temperature and the most common condition."""
@@ -115,7 +83,7 @@ def search_by_date(df, date_str):
     return df[df["Date"] == date_str]
 
 
-# ---------- Stretch goal 2: month / season filtering ----------
+# Stretch goal 2: month / season filtering
 
 def get_season(month):
     if month in (12, 1, 2):
@@ -146,7 +114,7 @@ def get_available_years(df):
     return sorted(dfd["Date_dt"].dt.year.unique().tolist())
 
 
-# ---------- Stretch goal 1: text-based trend graph ----------
+# Stretch goal 1: text-based trend graph
 
 def generate_text_trend(df, n=10):
     """Return an ASCII bar chart (string) of the last n observations' temperatures."""
@@ -164,7 +132,7 @@ def generate_text_trend(df, n=10):
     return "\n".join(lines)
 
 
-# ---------- Stretch goal 3: tomorrow's weather prediction ----------
+# Stretch goal 3: tomorrow's weather prediction
 
 def predict_tomorrow(df):
     """Predict tomorrow's temperature/condition using historical data from the same month."""
@@ -185,7 +153,7 @@ def predict_tomorrow(df):
     }
 
 
-# ---------- Stretch goal 4: year-over-year comparison ----------
+# Stretch goal 4: year-over-year comparison
 
 def compare_years(df, year1, year2):
     """Return monthly average temperature comparison between two years."""
@@ -199,7 +167,7 @@ def compare_years(df, year1, year2):
 
     comparison = pd.DataFrame({str(year1): y1, str(year2): y2})
 
-    # Convert numeric month index (1-12) to readable month names
+    # Convert numeric month index (1-12) to month names
     comparison.index = [MONTH_NAMES[m - 1] for m in comparison.index]
     comparison.index.name = "Month"
 
@@ -207,7 +175,7 @@ def compare_years(df, year1, year2):
     return comparison.round(2)
 
 
-# ---------- Stretch goal 5: record-breaking weather ----------
+# Stretch goal 5: record-breaking weather
 
 def get_records(df):
     """Return record-breaking temperature/humidity/wind values and the dates they occurred."""

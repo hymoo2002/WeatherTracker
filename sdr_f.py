@@ -1,11 +1,9 @@
 """
 sdr_f.py
 SDR receiver functions for the Weather Tracker app.
-Uses HackRF One via the hackrf_transfer command-line tool.
 
 Requirements:
     pip install numpy scipy sounddevice
-    (sounddevice ships PortAudio on Windows; on Linux: sudo apt install portaudio19-dev)
 """
 
 import os

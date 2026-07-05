@@ -37,9 +37,9 @@ menu = st.sidebar.radio(
     ],
 )
 
-# ─────────────────────────────────────────────────────────────────
+
 # Record a new observation
-# ─────────────────────────────────────────────────────────────────
+
 if menu == "Record a new observation":
     st.subheader("Record a New Weather Observation")
     with st.form("new_obs"):
@@ -50,7 +50,7 @@ if menu == "Record a new observation":
             ["Sunny", "Cloudy", "Rainy", "Snowy", "Windy", "Foggy", "Stormy", "Other"],
         )
         humidity = st.number_input("Humidity (%)", min_value=0, max_value=100, step=1)
-        wind_speed = st.number_input("Wind speed (km/h)", min_value=0.0, format="%.1f")
+        wind_speed = st.number_input("Wind speed (km/h)", min_value=0.0, format="%.1f", step=0.5)
         submitted = st.form_submit_button("Save Observation")
 
     if submitted:
@@ -62,9 +62,9 @@ if menu == "Record a new observation":
             )
             st.success(f"Observation for {date_str} saved.")
 
-# ─────────────────────────────────────────────────────────────────
+
 # View weather statistics
-# ─────────────────────────────────────────────────────────────────
+
 elif menu == "View weather statistics":
     st.subheader("Weather Statistics")
     stats = wf.get_statistics(df)
@@ -77,9 +77,9 @@ elif menu == "View weather statistics":
         col3.metric("Max Temp", f"{stats['max_temp']}°C")
         st.write(f"**Most common condition:** {stats['most_common_condition']}")
 
-# ─────────────────────────────────────────────────────────────────
+
 # Search observations by date
-# ─────────────────────────────────────────────────────────────────
+
 elif menu == "Search observations by date":
     st.subheader("Search Observations by Date")
     search_date = st.text_input("Date to search (DD-MM-YYYY)")
@@ -93,9 +93,9 @@ elif menu == "Search observations by date":
             else:
                 st.dataframe(results, use_container_width=True)
 
-# ─────────────────────────────────────────────────────────────────
+
 # View all observations
-# ─────────────────────────────────────────────────────────────────
+
 elif menu == "View all observations":
     st.subheader("All Weather Observations")
     if df.empty:
@@ -103,9 +103,9 @@ elif menu == "View all observations":
     else:
         st.dataframe(df, use_container_width=True)
 
-# ─────────────────────────────────────────────────────────────────
+
 # Temperature trends
-# ─────────────────────────────────────────────────────────────────
+
 elif menu == "Temperature trends":
     st.subheader("Temperature Trend (Text-Based Graph)")
     if df.empty:
@@ -114,9 +114,9 @@ elif menu == "Temperature trends":
         n = st.slider("Number of recent observations", 5, 50, 10)
         st.code(wf.generate_text_trend(df, n))
 
-# ─────────────────────────────────────────────────────────────────
+
 # Filter by month/season
-# ─────────────────────────────────────────────────────────────────
+
 elif menu == "Filter by month/season":
     st.subheader("Filter Observations")
 
@@ -145,9 +145,9 @@ elif menu == "Filter by month/season":
             else:
                 st.dataframe(season_result, use_container_width=True)
 
-# ─────────────────────────────────────────────────────────────────
+
 # Predict tomorrow's weather
-# ─────────────────────────────────────────────────────────────────
+
 elif menu == "Predict tomorrow's weather":
     st.subheader("Tomorrow's Weather Prediction")
     prediction = wf.predict_tomorrow(df)
@@ -159,9 +159,9 @@ elif menu == "Predict tomorrow's weather":
         st.write(f"**Predicted condition:** {prediction['predicted_condition']}")
         st.caption(f"Based on {prediction['sample_size']} observation(s) — {prediction['based_on']}.")
 
-# ─────────────────────────────────────────────────────────────────
+
 # Compare years
-# ─────────────────────────────────────────────────────────────────
+
 elif menu == "Compare years":
     st.subheader("Compare Years")
     years = wf.get_available_years(df)
@@ -174,9 +174,9 @@ elif menu == "Compare years":
         comparison = wf.compare_years(df, year1, year2)
         st.dataframe(comparison, use_container_width=True)
 
-# ─────────────────────────────────────────────────────────────────
+
 # Record-breaking weather
-# ─────────────────────────────────────────────────────────────────
+
 elif menu == "Record-breaking weather":
     st.subheader("Record-Breaking Weather")
     records = wf.get_records(df)
@@ -188,9 +188,9 @@ elif menu == "Record-breaking weather":
         st.write(f"💧 **Most humid day:** {records['most_humid'][0]} — {records['most_humid'][1]}%")
         st.write(f"💨 **Windiest day:** {records['windiest'][0]} — {records['windiest'][1]} km/h")
 
-# ─────────────────────────────────────────────────────────────────
+
 # Satellite Weather  (HackRF SDR receiver)
-# ─────────────────────────────────────────────────────────────────
+
 elif menu == "Satellite Weather":
     st.subheader("📡 Satellite Weather — Receiver")
     st.caption(
@@ -198,12 +198,12 @@ elif menu == "Satellite Weather":
         "Listen live or record for decoding."
     )
 
-    # ── persistent listener object ───────────────────────────────
+    # persistent listener object
     if "listener" not in st.session_state:
         st.session_state.listener = sdr.LiveListener()
     listener = st.session_state.listener
 
-    # ── HackRF status check ──────────────────────────────────────
+    # HackRF status check
     with st.expander("Check Radio connection", expanded=False):
         if st.button("Run Radio_info"):
             ok, info = sdr.check_hackrf()
@@ -216,7 +216,7 @@ elif menu == "Satellite Weather":
 
     st.divider()
 
-    # ── Frequency selection ──────────────────────────────────────
+    # Frequency selection
     preset_names = ["Manual entry"] + list(sdr.PRESETS.keys())
     chosen_preset = st.selectbox("Frequency preset", preset_names)
 
@@ -242,7 +242,7 @@ elif menu == "Satellite Weather":
             f"**Mode:** {mode}"
         )
 
-    # ── Gain settings ────────────────────────────────────────────
+    # Gain settings
     with st.expander("Gain settings", expanded=False):
         col_lna, col_vga = st.columns(2)
         lna_gain = col_lna.slider("LNA gain (dB)", 0, 40, 32, step=8,
@@ -258,9 +258,9 @@ elif menu == "Satellite Weather":
     sr_hz   = sample_rate_mhz * 1e6
     bw_hz   = bandwidth_khz * 1e3
 
-    # ═════════════════════════════════════════════════════════════
+    
     #  LISTEN — continuous audio through speakers
-    # ═════════════════════════════════════════════════════════════
+    
     st.divider()
     st.subheader("🎧 Listen")
     st.caption(
@@ -297,9 +297,9 @@ elif menu == "Satellite Weather":
                 else:
                     st.rerun()
 
-    # ═════════════════════════════════════════════════════════════
+    
     #  RECORD — capture to file, show spectrogram + download
-    # ═════════════════════════════════════════════════════════════
+    
     st.divider()
     st.subheader("🔴 Record")
     st.caption(
