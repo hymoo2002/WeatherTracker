@@ -93,13 +93,12 @@ def check_hackrf():
         return False, result.stderr or "hackrf_info returned an error."
     except FileNotFoundError:
         return False, (
-            "hackrf_info not found.\n"
-            "Install HackRF tools first:\n"
-            "  Linux:   sudo apt install hackrf\n"
-            "  Windows: install via Zadig + PothosSDR bundle"
+            "Radio_info not found.\n"
+            "Install SDR tools first:\n"
+            "  install via Zadig + PothosSDR bundle"
         )
     except subprocess.TimeoutExpired:
-        return False, "hackrf_info timed out – is the device stuck?"
+        return False, "Device_info timed out – is the device stuck?"
     except Exception as err:
         return False, str(err)
 
