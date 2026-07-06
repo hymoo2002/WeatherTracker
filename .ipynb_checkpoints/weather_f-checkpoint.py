@@ -12,6 +12,7 @@ CSV_FILE = "weather_data.csv"
 COLUMNS = ["Date", "Temperature_C", "Condition", "Humidity_%", "Wind_Speed_kmh"]
 DATE_FORMAT = "%d-%m-%Y"
 
+# Plain list used wherever we need month names (no lambda needed)
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
@@ -19,39 +20,17 @@ MONTH_NAMES = [
 
 
 def load_data(csv_path=CSV_FILE):
-    """Load weather observations from CSV, creating an empty file if none exists."""
+    #Load weather observations from CSV, creating an empty file if none exists.
+    _migrate_old_dates(csv_path)     # convert old dates on first run
     if os.path.exists(csv_path):
         df = pd.read_csv(csv_path, dtype={"Date": str})
-        # Fix any old-format dates (YYYY-MM-DD) → DD-MM-YYYY
-        df["Date"] = df["Date"].apply(_normalise_date)
-        df.to_csv(csv_path, index=False)
     else:
         df = pd.DataFrame(columns=COLUMNS)
         df.to_csv(csv_path, index=False)
     return df
 
 
-def _normalise_date(date_str):
-    """Accept DD-MM-YYYY or YYYY-MM-DD and always return DD-MM-YYYY."""
-    if not isinstance(date_str, str):
-        return date_str
-    # Already DD-MM-YYYY
-    try:
-        datetime.strptime(date_str, "%d-%m-%Y")
-        return date_str
-    except ValueError:
-        pass
-    # Old format YYYY-MM-DD
-    try:
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
-        return dt.strftime("%d-%m-%Y")
-    except ValueError:
-        pass
-    return date_str  # leave as-is if unparseable
-
-
-def save_observation(date_str, temperature, condition, humidity, wind_speed,
-                     csv_path=CSV_FILE):
+def save_observation(date_str, temperature, condition, humidity, wind_speed, csv_path=CSV_FILE):
     """Append a new observation to the CSV file and return the updated DataFrame."""
     df = load_data(csv_path)
     new_row = {
@@ -75,15 +54,16 @@ def validate_date(date_str):
 
 
 def _with_datetime(df):
-    """Return a copy of df with a parsed Date_dt column; bad rows dropped."""
+    """Return a copy of df with a parsed Date_dt column; rows with bad dates dropped."""
     df = df.copy()
     df["Date_dt"] = pd.to_datetime(df["Date"], format=DATE_FORMAT, errors="coerce")
     return df.dropna(subset=["Date_dt"])
 
 
-# ── Core features ────────────────────────────────────────────────
+# Core features
 
 def get_statistics(df):
+    """Return avg/min/max temperature and the most common condition."""
     if df.empty:
         return None
     temps = pd.to_numeric(df["Temperature_C"], errors="coerce").dropna()
@@ -99,10 +79,11 @@ def get_statistics(df):
 
 
 def search_by_date(df, date_str):
+    """Return all observations matching the given date string."""
     return df[df["Date"] == date_str]
 
 
-# ── Month / season filtering ────────────────────────────────────
+# Stretch goal 2: month / season filtering
 
 def get_season(month):
     if month in (12, 1, 2):
@@ -115,6 +96,7 @@ def get_season(month):
 
 
 def filter_by_month(df, month):
+    """month: int 1-12"""
     dfd = _with_datetime(df)
     return dfd[dfd["Date_dt"].dt.month == month].drop(columns="Date_dt")
 
@@ -132,9 +114,10 @@ def get_available_years(df):
     return sorted(dfd["Date_dt"].dt.year.unique().tolist())
 
 
-# ── Text-based trend graph ──────────────────────────────────────
+# Stretch goal 1: text-based trend graph
 
 def generate_text_trend(df, n=10):
+    """Return an ASCII bar chart (string) of the last n observations' temperatures."""
     dfd = _with_datetime(df).sort_values("Date_dt")
     if dfd.empty:
         return "No data available."
@@ -149,9 +132,10 @@ def generate_text_trend(df, n=10):
     return "\n".join(lines)
 
 
-# ── Tomorrow's weather prediction ──────────────────────────────
+# Stretch goal 3: tomorrow's weather prediction
 
 def predict_tomorrow(df):
+    """Predict tomorrow's temperature/condition using historical data from the same month."""
     dfd = _with_datetime(df)
     if dfd.empty:
         return None
@@ -169,25 +153,32 @@ def predict_tomorrow(df):
     }
 
 
-# ── Year-over-year comparison ──────────────────────────────────
+# Stretch goal 4: year-over-year comparison
 
 def compare_years(df, year1, year2):
+    """Return monthly average temperature comparison between two years."""
     dfd = _with_datetime(df)
     dfd["Temperature_C"] = pd.to_numeric(dfd["Temperature_C"], errors="coerce")
     dfd["Year"] = dfd["Date_dt"].dt.year
     dfd["Month"] = dfd["Date_dt"].dt.month
+
     y1 = dfd[dfd["Year"] == year1].groupby("Month")["Temperature_C"].mean()
     y2 = dfd[dfd["Year"] == year2].groupby("Month")["Temperature_C"].mean()
+
     comparison = pd.DataFrame({str(year1): y1, str(year2): y2})
+
+    # Convert numeric month index (1-12) to month names
     comparison.index = [MONTH_NAMES[m - 1] for m in comparison.index]
     comparison.index.name = "Month"
+
     comparison["Difference"] = comparison[str(year1)] - comparison[str(year2)]
     return comparison.round(2)
 
 
-# ── Record-breaking weather ────────────────────────────────────
+# Stretch goal 5: record-breaking weather
 
 def get_records(df):
+    """Return record-breaking temperature/humidity/wind values and the dates they occurred."""
     if df.empty:
         return None
     dfd = df.copy()
@@ -197,10 +188,12 @@ def get_records(df):
     dfd = dfd.dropna(subset=["Temperature_C", "Humidity_%", "Wind_Speed_kmh"])
     if dfd.empty:
         return None
+
     hottest = dfd.loc[dfd["Temperature_C"].idxmax()]
     coldest = dfd.loc[dfd["Temperature_C"].idxmin()]
     most_humid = dfd.loc[dfd["Humidity_%"].idxmax()]
     windiest = dfd.loc[dfd["Wind_Speed_kmh"].idxmax()]
+
     return {
         "hottest": (hottest["Date"], hottest["Temperature_C"]),
         "coldest": (coldest["Date"], coldest["Temperature_C"]),

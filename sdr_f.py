@@ -1,221 +1,262 @@
 """
 sdr_f.py
 SDR receiver functions for the Weather Tracker app.
+Uses pyadi-iio for PlutoSDR / AD9361-compatible devices (RX only).
 
 Requirements:
-    pip install numpy scipy sounddevice
+    pip install pyadi-iio numpy scipy sounddevice
 """
 
 import os
-import subprocess
 import tempfile
 import threading
-from datetime import datetime
 
 import numpy as np
 from scipy.io import wavfile
-from scipy.signal import decimate
+from scipy.signal import decimate, lfilter
 
-# ── Satellite / radio frequency presets ──────────────────────────
-# Each entry: (freq_mhz, sample_rate_mhz, bandwidth_khz,
-#              default_mode, short_description)
-#
-# Modes:  "FM"  = wideband FM demodulation
-#         "AM"  = AM envelope detection
-#         "Raw" = save IQ file only (for SatDump)
+try:
+    import adi
+    ADI_AVAILABLE = True
+except ImportError:
+    ADI_AVAILABLE = False
+
+# ── Device config ────────────────────────────────────────────────
+SDR_URI = "ip:192.168.2.1"
+AUDIO_RATE = 48000
+
+# ── Frequency presets ────────────────────────────────────────────
+# (freq_mhz, sample_rate_mhz, bandwidth_khz, mode, description)
 
 PRESETS = {
-    # ── Testing ──────────────────────────────────────────────────
+    # Testing
     "FM Radio (test ~98 MHz)":
-        (98.0,    2.5, 200,  "FM",  "Local FM station – good first test"),
+        (98.0, 2.5, 200, "FM", "Local FM station – good first test"),
 
-    # ── VHF weather satellites  (V-dipole / QFH antenna) ────────
+    # VHF weather satellites
     "NOAA-15  APT  137.620 MHz":
-        (137.620,   2.5, 40,  "FM",  "APT weather image, ~40 kHz signal"),
+        (137.620, 2.5, 40, "FM", "APT weather image, ~40 kHz signal"),
     "NOAA-18  APT  137.9125 MHz":
-        (137.9125,  2.5, 40,  "FM",  "APT weather image, ~40 kHz signal"),
+        (137.9125, 2.5, 40, "FM", "APT weather image, ~40 kHz signal"),
     "NOAA-19  APT  137.100 MHz":
-        (137.100,   2.5, 40,  "FM",  "APT weather image, ~40 kHz signal"),
+        (137.100, 2.5, 40, "FM", "APT weather image, ~40 kHz signal"),
     "Meteor M2-4  LRPT  137.100 MHz":
-        (137.100,   2.5, 150, "Raw", "Digital LRPT – decode in SatDump"),
+        (137.100, 2.5, 150, "Raw", "Digital LRPT – decode in SatDump"),
 
-    # ── L-band satellites  (dish / helix antenna) ────────────────
+    # L-band satellites
     "NOAA-15  HRPT  1702.5 MHz":
-        (1702.5,  3.0, 2000, "Raw", "High-res digital – needs dish"),
+        (1702.5, 3.0, 2000, "Raw", "High-res digital – needs dish"),
     "NOAA-18  HRPT  1707.0 MHz":
-        (1707.0,  3.0, 2000, "Raw", "High-res digital – needs dish"),
+        (1707.0, 3.0, 2000, "Raw", "High-res digital – needs dish"),
     "NOAA-19  HRPT  1698.0 MHz":
-        (1698.0,  3.0, 2000, "Raw", "High-res digital – needs dish"),
+        (1698.0, 3.0, 2000, "Raw", "High-res digital – needs dish"),
     "MetOp-B  AHRPT  1701.3 MHz":
-        (1701.3,  3.0, 2000, "Raw", "EUMETSAT polar orbiter – needs dish"),
+        (1701.3, 3.0, 2000, "Raw", "EUMETSAT polar orbiter – needs dish"),
     "MetOp-C  AHRPT  1701.3 MHz":
-        (1701.3,  3.0, 2000, "Raw", "EUMETSAT polar orbiter – needs dish"),
+        (1701.3, 3.0, 2000, "Raw", "EUMETSAT polar orbiter – needs dish"),
     "Meteor M2-4  HRPT  1700 MHz":
-        (1700.0,  3.0, 2000, "Raw", "Russian polar orbiter – needs dish"),
+        (1700.0, 3.0, 2000, "Raw", "Russian polar orbiter – needs dish"),
     "FengYun-3E  AHRPT  1704.5 MHz":
-        (1704.5,  3.0, 2000, "Raw", "Chinese polar orbiter – needs dish"),
+        (1704.5, 3.0, 2000, "Raw", "Chinese polar orbiter – needs dish"),
     "GOES-16  HRIT  1694.1 MHz":
-        (1694.1,  3.0, 1200, "Raw", "Geostationary weather – needs dish"),
+        (1694.1, 3.0, 1200, "Raw", "Geostationary weather – needs dish"),
     "GOES-18  HRIT  1694.1 MHz":
-        (1694.1,  3.0, 1200, "Raw", "Geostationary weather – needs dish"),
+        (1694.1, 3.0, 1200, "Raw", "Geostationary weather – needs dish"),
 
-    # ── Marine / other ──────────────────────────────────────────
+    # Marine
     "AIS (ships)  161.975 MHz":
-        (161.975, 2.5, 25,  "FM",  "Ship tracking channel 1"),
+        (161.975, 2.5, 25, "FM", "Ship tracking channel 1"),
     "AIS (ships)  162.025 MHz":
-        (162.025, 2.5, 25,  "FM",  "Ship tracking channel 2"),
+        (162.025, 2.5, 25, "FM", "Ship tracking channel 2"),
     "Inmarsat STD-C  1539.9 MHz":
-        (1539.9,  2.5, 50,  "Raw", "Maritime safety messages"),
+        (1539.9, 2.5, 50, "Raw", "Maritime safety messages"),
 }
 
-AUDIO_RATE = 48000  # output WAV sample rate in Hz
+
+# ═════════════════════════════════════════════════════════════════
+#  DSP helpers
+# ═════════════════════════════════════════════════════════════════
+
+def _safe_decimate(x, factor):
+    """Decimate a real signal in stages of max 12x each."""
+    if factor <= 1:
+        return x
+    while factor > 1:
+        step = min(factor, 12)
+        x = decimate(x.astype(np.float64), step)
+        factor //= step
+    return x
 
 
-# ── HackRF hardware check ───────────────────────────────────────
+def _safe_decimate_iq(iq, factor):
+    """Decimate a complex IQ signal (filter both I and Q)."""
+    if factor <= 1:
+        return iq
+    real = _safe_decimate(iq.real, factor)
+    imag = _safe_decimate(iq.imag, factor)
+    return (real + 1j * imag).astype(np.complex64)
 
-def check_hackrf():
-    """
-    Run hackrf_info and return (ok, message).
-    ok   = True  if a HackRF was found
-    ok   = False if not found or tools missing
-    """
-    try:
-        result = subprocess.run(
-            ["hackrf_info"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            return True, result.stdout
-        return False, result.stderr or "hackrf_info returned an error."
-    except FileNotFoundError:
+
+def _deemphasis(audio, sample_rate, tau=50e-6):
+    """FM broadcast de-emphasis filter (50 µs for most of world)."""
+    alpha = 1.0 / (sample_rate * tau + 1.0)
+    return lfilter([alpha], [1.0, -(1.0 - alpha)], audio)
+
+
+# ═════════════════════════════════════════════════════════════════
+#  SDR connection
+# ═════════════════════════════════════════════════════════════════
+
+def check_sdr():
+    if not ADI_AVAILABLE:
         return False, (
-            "Radio_info not found.\n"
-            "Install SDR tools first:\n"
-            "  install via Zadig + PothosSDR bundle"
+            "pyadi-iio is not installed.\n"
+            "Run:  pip install pyadi-iio"
         )
-    except subprocess.TimeoutExpired:
-        return False, "Device_info timed out – is the device stuck?"
-    except Exception as err:
-        return False, str(err)
+    try:
+        radio = adi.ad9361(uri=SDR_URI)
+        info = (
+            f"SDR connected at {SDR_URI}\n"
+            f"Sample rate : {radio.sample_rate} Hz\n"
+            f"RX LO       : {radio.rx_lo} Hz\n"
+        )
+        del radio
+        return True, info
+    except Exception as e:
+        return False, f"Cannot connect to SDR at {SDR_URI}:\n{e}"
 
 
-# ── IQ capture (for Record mode) ────────────────────────────────
+def _make_radio(freq_hz, sample_rate_hz, rx_gain=40, buf_size=2**16):
+    """Create an ad9361 configured for RX-only on channel 0."""
+    radio = adi.ad9361(uri=SDR_URI)
+    radio.rx_enabled_channels = [0]
+    radio.sample_rate = int(sample_rate_hz)
+    # Set analog filter to full sample rate — narrow filtering is done
+    # in software, just like SDR# does.
+    radio.rx_rf_bandwidth = int(sample_rate_hz)
+    radio.rx_lo = int(freq_hz)
+    radio.gain_control_mode_chan0 = "manual"
+    radio.rx_hardwaregain_chan0 = int(rx_gain)
+    radio.rx_buffer_size = int(buf_size)
+    radio._rxadc.set_kernel_buffers_count(1)
+    return radio
+
+
+# ═════════════════════════════════════════════════════════════════
+#  IQ capture  (Record mode)
+# ═════════════════════════════════════════════════════════════════
 
 def capture_iq(freq_hz, sample_rate_hz, duration_sec, bandwidth_hz,
-               lna_gain=32, vga_gain=40, amp_on=False):
+               rx_gain=40):
     """
-    Capture IQ samples with hackrf_transfer (blocking, finite).
+    Capture IQ samples from the PlutoSDR.
 
-    Returns
-    -------
-    samples : numpy complex64 array   (None on failure)
-    iq_path : str   path to the raw .iq file on disk
-    error   : str   error message (empty on success)
+    Returns  (samples, iq_path, error)
+    -  samples are at the ORIGINAL sample rate (not decimated)
+    -  iq_path points to the raw cs8 file for SatDump
     """
-    num_samples = int(sample_rate_hz * duration_sec)
-    iq_path = os.path.join(tempfile.gettempdir(), "hackrf_capture.iq")
+    iq_path = os.path.join(tempfile.gettempdir(), "pluto_capture.iq")
 
-    command = [
-        "hackrf_transfer",
-        "-r", iq_path,
-        "-f", str(int(freq_hz)),
-        "-s", str(int(sample_rate_hz)),
-        "-n", str(num_samples),
-        "-l", str(int(lna_gain)),
-        "-g", str(int(vga_gain)),
-        "-a", "1" if amp_on else "0",
-    ]
+    if not ADI_AVAILABLE:
+        return None, iq_path, "pyadi-iio is not installed."
 
     try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=duration_sec + 15,
-        )
-    except subprocess.TimeoutExpired:
-        return None, iq_path, "Capture timed out."
-    except FileNotFoundError:
-        return None, iq_path, "hackrf_transfer not found."
-    except Exception as err:
-        return None, iq_path, str(err)
+        radio = _make_radio(freq_hz, sample_rate_hz, rx_gain)
+    except Exception as e:
+        return None, iq_path, str(e)
 
-    if result.returncode != 0:
-        return None, iq_path, result.stderr or "hackrf_transfer failed."
+    total_samples = int(sample_rate_hz * duration_sec)
+    chunks = []
+    collected = 0
 
-    samples = read_iq_file(iq_path)
-    if samples is None:
-        return None, iq_path, "Could not read the .iq file."
+    try:
+        for _ in range(10):
+            radio.rx()
 
-    # Apply software bandwidth filter
-    samples = _apply_bw_filter(samples, sample_rate_hz, bandwidth_hz)
+        while collected < total_samples:
+            data = radio.rx()
+            chunks.append(data.copy())
+            collected += len(data)
+    except Exception as e:
+        return None, iq_path, str(e)
+    finally:
+        del radio
+
+    samples = np.concatenate(chunks)[:total_samples]
+
+    # remove DC offset (LO leakage)
+    samples = samples - np.mean(samples)
+
+    # normalise to −1…+1
+    peak = np.max(np.abs(samples))
+    if peak > 0:
+        samples = (samples / peak).astype(np.complex64)
+
+    # save raw IQ as cs8 for SatDump
+    save_raw_iq(samples, iq_path)
 
     return samples, iq_path, ""
 
 
-def read_iq_file(path):
+# ═════════════════════════════════════════════════════════════════
+#  Demodulation
+# ═════════════════════════════════════════════════════════════════
+
+def demod_fm(samples, sample_rate_hz, bandwidth_hz=None):
     """
-    Read a hackrf_transfer .iq file (interleaved int8) into a
-    numpy complex64 array scaled to -1 … +1.
-    Returns None if the file is missing or empty.
+    FM demodulation with proper filtering.
+
+    1.  Low-pass filter + decimate IQ to the signal bandwidth
+    2.  FM discriminator  (diff of unwrapped phase)
+    3.  Decimate audio to 48 kHz
+    4.  De-emphasis for wideband FM  (>100 kHz bandwidth)
+    5.  Normalise
     """
-    if not os.path.isfile(path):
-        return None
-    raw = np.fromfile(path, dtype=np.int8)
-    if len(raw) < 2:
-        return None
-    i_samples = raw[0::2].astype(np.float32)
-    q_samples = raw[1::2].astype(np.float32)
-    samples = (i_samples + 1j * q_samples) / 128.0
-    return samples
+    # ── step 1: narrow to signal bandwidth ──
+    if bandwidth_hz and bandwidth_hz < sample_rate_hz:
+        iq_dec = int(sample_rate_hz / bandwidth_hz)
+        if iq_dec > 1:
+            samples = _safe_decimate_iq(samples, iq_dec)
+            sample_rate_hz = sample_rate_hz / iq_dec
 
-
-# ── Bandwidth filter ─────────────────────────────────────────────
-
-def _apply_bw_filter(samples, sample_rate_hz, bandwidth_hz):
-    """
-    Decimate the IQ signal so that the effective sample rate roughly
-    matches the desired bandwidth.  Simple and fast — good enough for
-    listening; SatDump should use the unfiltered .iq file anyway.
-    """
-    if bandwidth_hz >= sample_rate_hz:
-        return samples
-    factor = max(1, int(sample_rate_hz / bandwidth_hz))
-    if factor <= 1:
-        return samples
-    # scipy decimate applies an anti-alias filter before downsampling
-    real_dec = decimate(samples.real, factor)
-    imag_dec = decimate(samples.imag, factor)
-    return real_dec + 1j * imag_dec
-
-
-# ── Demodulation ─────────────────────────────────────────────────
-
-def demod_fm(samples, sample_rate_hz):
-    """FM demodulation: derivative of unwrapped phase, then downsample."""
+    # ── step 2: FM discriminator ──
     phase = np.angle(samples)
     audio = np.diff(np.unwrap(phase))
 
-    factor = max(1, int(sample_rate_hz / AUDIO_RATE))
-    if factor > 1:
-        audio = decimate(audio, factor)
+    # ── step 3: decimate to audio rate ──
+    audio_dec = max(1, int(sample_rate_hz / AUDIO_RATE))
+    if audio_dec > 1:
+        audio = _safe_decimate(audio, audio_dec)
+        sample_rate_hz = sample_rate_hz / audio_dec
 
+    # ── step 4: de-emphasis for broadcast FM ──
+    if bandwidth_hz and bandwidth_hz >= 100_000:
+        audio = _deemphasis(audio, sample_rate_hz, tau=50e-6)
+
+    # ── step 5: normalise ──
     peak = np.max(np.abs(audio))
     if peak > 0:
         audio = audio / peak * 0.9
     return audio.astype(np.float32)
 
 
-def demod_am(samples, sample_rate_hz):
-    """AM envelope detection: magnitude, remove DC, then downsample."""
+def demod_am(samples, sample_rate_hz, bandwidth_hz=None):
+    """AM envelope detection with proper filtering."""
+    # narrow to signal bandwidth
+    if bandwidth_hz and bandwidth_hz < sample_rate_hz:
+        iq_dec = int(sample_rate_hz / bandwidth_hz)
+        if iq_dec > 1:
+            samples = _safe_decimate_iq(samples, iq_dec)
+            sample_rate_hz = sample_rate_hz / iq_dec
+
+    # envelope
     audio = np.abs(samples).astype(np.float64)
     audio = audio - np.mean(audio)
 
-    factor = max(1, int(sample_rate_hz / AUDIO_RATE))
-    if factor > 1:
-        audio = decimate(audio, factor)
+    # decimate to audio rate
+    audio_dec = max(1, int(sample_rate_hz / AUDIO_RATE))
+    if audio_dec > 1:
+        audio = _safe_decimate(audio, audio_dec)
 
     peak = np.max(np.abs(audio))
     if peak > 0:
@@ -223,113 +264,100 @@ def demod_am(samples, sample_rate_hz):
     return audio.astype(np.float32)
 
 
-# ── Save helpers ─────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════
+#  Save / load helpers
+# ═════════════════════════════════════════════════════════════════
 
 def save_wav(audio, filepath):
-    """Save a float32 audio array as a 16-bit WAV at AUDIO_RATE."""
     audio_int16 = (audio * 32767).astype(np.int16)
     wavfile.write(filepath, AUDIO_RATE, audio_int16)
     return filepath
 
 
 def save_raw_iq(samples, filepath):
-    """Save complex samples to interleaved int8 .iq (cs8 for SatDump)."""
+    """Save normalised (−1…+1) complex samples as interleaved int8 cs8."""
     iq = np.empty(len(samples) * 2, dtype=np.int8)
-    iq[0::2] = (samples.real * 128).clip(-128, 127).astype(np.int8)
-    iq[1::2] = (samples.imag * 128).clip(-128, 127).astype(np.int8)
+    iq[0::2] = (samples.real * 127).clip(-128, 127).astype(np.int8)
+    iq[1::2] = (samples.imag * 127).clip(-128, 127).astype(np.int8)
     iq.tofile(filepath)
     return filepath
 
 
-# ── Spectrogram for display ──────────────────────────────────────
+def read_iq_file(path):
+    if not os.path.isfile(path):
+        return None
+    raw = np.fromfile(path, dtype=np.int8)
+    if len(raw) < 2:
+        return None
+    i = raw[0::2].astype(np.float32)
+    q = raw[1::2].astype(np.float32)
+    return ((i + 1j * q) / 128.0).astype(np.complex64)
 
-def make_spectrogram(samples, sample_rate_hz, center_freq_hz,
-                     fft_size=1024):
-    """
-    Build a waterfall array from IQ samples.
 
-    Returns
-    -------
-    spec_db : 2-D array  (rows=time, cols=frequency)
-    extent  : [freq_min_MHz, freq_max_MHz, time_max_s, 0]
-    """
+# ═════════════════════════════════════════════════════════════════
+#  Spectrogram
+# ═════════════════════════════════════════════════════════════════
+
+def make_spectrogram(samples, sample_rate_hz, center_freq_hz, fft_size=1024):
     num_rows = len(samples) // fft_size
     if num_rows == 0:
         return None, None
 
     spec = np.zeros((num_rows, fft_size))
+    win = np.hamming(fft_size)
     for i in range(num_rows):
-        chunk = samples[i * fft_size : (i + 1) * fft_size]
-        fft_vals = np.fft.fftshift(np.fft.fft(chunk))
+        chunk = samples[i * fft_size:(i + 1) * fft_size]
+        fft_vals = np.fft.fftshift(np.fft.fft(chunk * win))
         spec[i, :] = 10 * np.log10(np.abs(fft_vals) ** 2 + 1e-12)
 
     freq_min = (center_freq_hz - sample_rate_hz / 2) / 1e6
     freq_max = (center_freq_hz + sample_rate_hz / 2) / 1e6
     time_max = len(samples) / sample_rate_hz
-    extent = [freq_min, freq_max, time_max, 0]
-
-    return spec, extent
+    return spec, [freq_min, freq_max, time_max, 0]
 
 
-# =====================================================================
-#  Live Listener  — continuous audio through the speakers
-# =====================================================================
+# ═════════════════════════════════════════════════════════════════
+#  Live Listener
+# ═════════════════════════════════════════════════════════════════
 
 class LiveListener:
     """
-    Streams IQ from HackRF via `hackrf_transfer -r -` (stdout pipe),
-    demodulates FM or AM in real-time, and plays audio through the
-    system speakers using the `sounddevice` library.
-
-    Usage from Streamlit (store in session_state):
-        listener = LiveListener()
-        listener.start(freq, sr, bw, "FM", lna, vga, amp)
-        ...
-        listener.stop()
+    Continuously reads IQ from PlutoSDR, demodulates FM/AM, and plays
+    audio through the speakers using sounddevice.
     """
 
     def __init__(self):
         self.running = False
-        self.process = None
+        self._radio = None
         self.thread = None
-        self.error = ""           # last error message (shown in UI)
-        self._prev_sample = 0+0j  # keeps FM demod continuous
-
-    # ── public API ───────────────────────────────────────────────
+        self.error = ""
+        self._prev_sample = 0 + 0j
 
     def is_running(self):
         return self.running and self.thread is not None and self.thread.is_alive()
 
     def start(self, freq_hz, sample_rate_hz, bandwidth_hz, mode,
-              lna_gain=32, vga_gain=40, amp_on=False):
-        """Launch hackrf_transfer and start the audio thread."""
+              rx_gain=40):
         if self.is_running():
             self.stop()
 
         self.running = True
         self.error = ""
-        self._prev_sample = 0+0j
+        self._prev_sample = 0 + 0j
 
-        cmd = [
-            "hackrf_transfer",
-            "-r", "-",                       # stream to stdout
-            "-f", str(int(freq_hz)),
-            "-s", str(int(sample_rate_hz)),
-            "-l", str(int(lna_gain)),
-            "-g", str(int(vga_gain)),
-            "-a", "1" if amp_on else "0",
-        ]
-
-        try:
-            self.process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
-        except FileNotFoundError:
-            self.error = "hackrf_transfer not found."
+        if not ADI_AVAILABLE:
+            self.error = "pyadi-iio is not installed."
             self.running = False
             return
-        except Exception as err:
-            self.error = str(err)
+
+        try:
+            self._radio = _make_radio(
+                freq_hz, sample_rate_hz, rx_gain, buf_size=2**16,
+            )
+            for _ in range(10):
+                self._radio.rx()
+        except Exception as e:
+            self.error = str(e)
             self.running = False
             return
 
@@ -341,26 +369,20 @@ class LiveListener:
         self.thread.start()
 
     def stop(self):
-        """Kill the hackrf_transfer process and wait for the thread."""
         self.running = False
-        if self.process:
-            try:
-                self.process.terminate()
-                self.process.wait(timeout=3)
-            except Exception:
-                try:
-                    self.process.kill()
-                except Exception:
-                    pass
-            self.process = None
         if self.thread:
             self.thread.join(timeout=5)
             self.thread = None
+        if self._radio:
+            try:
+                del self._radio
+            except Exception:
+                pass
+            self._radio = None
 
-    # ── internal audio loop (runs in background thread) ──────────
+    # ── background thread ────────────────────────────────────────
 
     def _audio_loop(self, sample_rate_hz, bandwidth_hz, mode):
-        """Read IQ → decimate → demodulate → speakers."""
         try:
             import sounddevice as sd
         except ImportError:
@@ -371,47 +393,43 @@ class LiveListener:
             self.running = False
             return
 
-        # Decimate IQ to roughly the desired bandwidth
+        # ── compute decimation plan ──
         iq_dec = max(1, int(sample_rate_hz / bandwidth_hz))
         effective_sr = sample_rate_hz / iq_dec
-
-        # Decimate demodulated audio to 48 kHz
         audio_dec = max(1, int(effective_sr / AUDIO_RATE))
         actual_audio_rate = effective_sr / audio_dec
 
-        # How many IQ bytes to read per chunk (~100 ms of full-rate data)
-        chunk_samples = int(sample_rate_hz * 0.1)
-        chunk_bytes = chunk_samples * 2          # I + Q, each 1 byte
+        # wideband FM gets de-emphasis
+        do_deemph = (mode == "FM" and bandwidth_hz >= 100_000)
 
         try:
             stream = sd.OutputStream(
                 samplerate=actual_audio_rate,
                 channels=1,
                 dtype="float32",
-                blocksize=2048,
+                blocksize=4096,
             )
             stream.start()
-        except Exception as err:
-            self.error = f"Audio output error: {err}"
+        except Exception as e:
+            self.error = f"Audio output error: {e}"
             self.running = False
             return
 
         try:
             while self.running:
-                raw = self.process.stdout.read(chunk_bytes)
-                if not raw:
-                    break
+                iq = self._radio.rx()
 
-                # ── parse IQ ──
-                data = np.frombuffer(raw, dtype=np.int8)
-                if len(data) < 2:
-                    continue
-                iq = (data[0::2].astype(np.float32)
-                      + 1j * data[1::2].astype(np.float32)) / 128.0
+                # remove DC offset
+                iq = iq - np.mean(iq)
 
-                # ── decimate IQ to bandwidth ──
+                # ── fast IQ decimation (reshape + mean) ──
+                # Averages groups of iq_dec samples then keeps one
+                # value per group.  Acts as a boxcar anti-alias filter
+                # + downsample in a single vectorised numpy op — orders
+                # of magnitude faster than scipy.decimate.
                 if iq_dec > 1:
-                    iq = iq[::iq_dec]
+                    n = (len(iq) // iq_dec) * iq_dec
+                    iq = iq[:n].reshape(-1, iq_dec).mean(axis=1)
 
                 # ── demodulate ──
                 if mode == "FM":
@@ -419,25 +437,29 @@ class LiveListener:
                     self._prev_sample = iq[-1]
                     audio = np.diff(np.unwrap(np.angle(full)))
                 elif mode == "AM":
-                    audio = np.abs(iq)
-                    audio = audio - np.mean(audio)
+                    audio = np.abs(iq).astype(np.float64)
+                    audio -= np.mean(audio)
                 else:
-                    continue     # Raw mode has nothing to play
+                    continue
 
-                # ── decimate to audio rate ──
+                # ── fast audio decimation ──
                 if audio_dec > 1:
-                    audio = audio[::audio_dec]
+                    n = (len(audio) // audio_dec) * audio_dec
+                    audio = audio[:n].reshape(-1, audio_dec).mean(axis=1)
+
+                # ── de-emphasis ──
+                if do_deemph:
+                    audio = _deemphasis(audio, actual_audio_rate, tau=50e-6)
 
                 # ── normalise ──
                 audio = audio.astype(np.float32)
                 peak = np.max(np.abs(audio))
                 if peak > 0:
                     audio = audio / peak * 0.7
-
                 stream.write(audio)
 
-        except Exception as err:
-            self.error = f"Listener error: {err}"
+        except Exception as e:
+            self.error = f"Listener error: {e}"
         finally:
             try:
                 stream.stop()

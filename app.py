@@ -16,7 +16,7 @@ import weather_f as wf
 st.set_page_config(page_title="Weather Tracker", layout="centered")
 st.title("🌦️ Weather Tracker")
 
-if  "df" not in st.session_state:
+if "df" not in st.session_state:
     st.session_state.df = wf.load_data()
 
 df = st.session_state.df
@@ -146,7 +146,7 @@ elif menu == "Filter by month/season":
                 st.dataframe(season_result, use_container_width=True)
 
 
-# Predict tomorrow's weather
+# Predict tomorrow's weather 
 
 elif menu == "Predict tomorrow's weather":
     st.subheader("Tomorrow's Weather Prediction")
@@ -189,29 +189,29 @@ elif menu == "Record-breaking weather":
         st.write(f"💨 **Windiest day:** {records['windiest'][0]} — {records['windiest'][1]} km/h")
 
 
-# Satellite Weather  (HackRF SDR receiver)
+# Satellite Weather (PlutoSDR receiver)
 
 elif menu == "Satellite Weather":
     st.subheader("📡 Satellite Weather — Receiver")
     st.caption(
-        "Tune into radio and satellite frequencies with your Radio.  "
+        "Tune into radio and satellite frequencies with your SDR.  "
         "Listen live or record for decoding."
     )
 
-    # persistent listener object
+    # persistent listener
     if "listener" not in st.session_state:
         st.session_state.listener = sdr.LiveListener()
     listener = st.session_state.listener
 
-    # HackRF status check
-    with st.expander("Check Radio connection", expanded=False):
-        if st.button("Run Radio_info"):
-            ok, info = sdr.check_hackrf()
+    # SDR connection check
+    with st.expander("Check SDR connection", expanded=False):
+        if st.button("Check SDR"):
+            ok, info = sdr.check_sdr()
             if ok:
-                st.success("Radio detected!")
+                st.success("SDR detected!")
                 st.code(info)
             else:
-                st.error("Radio not found.")
+                st.error("SDR not found.")
                 st.code(info)
 
     st.divider()
@@ -242,29 +242,21 @@ elif menu == "Satellite Weather":
             f"**Mode:** {mode}"
         )
 
-    # Gain settings
+    # Gain setting (single slider for AD9361)
     with st.expander("Gain settings", expanded=False):
-        col_lna, col_vga = st.columns(2)
-        lna_gain = col_lna.slider("LNA gain (dB)", 0, 40, 32, step=8,
-                                  help="0–40 dB in 8 dB steps")
-        vga_gain = col_vga.slider("VGA gain (dB)", 0, 62, 40, step=2,
-                                  help="0–62 dB in 2 dB steps")
-        amp_on = st.checkbox("RF amp (+11 dB)", value=False,
-                             help="Enable only for very weak signals "
-                                  "with no strong signals nearby")
+        rx_gain = st.slider("RX gain (dB)", 0, 73, 40, step=1,
+                            help="AD9361 hardware gain, 0–73 dB")
 
-    # convert units once
+    # convert units
     freq_hz = freq_mhz * 1e6
     sr_hz   = sample_rate_mhz * 1e6
     bw_hz   = bandwidth_khz * 1e3
 
-    
-    #  LISTEN — continuous audio through speakers
-    
+    # ── LISTEN 
     st.divider()
     st.subheader("🎧 Listen")
     st.caption(
-        "Continuous playback through your speakers — like SDR#.  "
+        "Continuous playback through your speakers.  "
         "Works with FM and AM modes."
     )
 
@@ -275,7 +267,6 @@ elif menu == "Satellite Weather":
             "Record below to capture an IQ file for SatDump."
         )
 
-    # show current status
     if listener.is_running():
         st.success("🟢  Listening …")
         if st.button("⏹  Stop listening"):
@@ -288,22 +279,19 @@ elif menu == "Satellite Weather":
             if st.button("▶️  Start listening"):
                 listener.start(
                     freq_hz, sr_hz, bw_hz, mode,
-                    lna_gain=lna_gain, vga_gain=vga_gain, amp_on=amp_on,
+                    rx_gain=rx_gain,
                 )
-                # short pause so the thread has time to fail fast
                 import time; time.sleep(0.3)
                 if listener.error:
                     st.error(listener.error)
                 else:
                     st.rerun()
 
-    
-    #  RECORD — capture to file, show spectrogram + download
-    
+    # RECORD
     st.divider()
     st.subheader("🔴 Record")
     st.caption(
-        "Capture a recording to disk.  For a full NOAA satellite "
+        "Capture a recording.  For a full NOAA satellite "
         "pass try ~900 s (15 min)."
     )
 
@@ -313,7 +301,6 @@ elif menu == "Satellite Weather":
     )
 
     if st.button("🔴  Start recording", type="primary"):
-        # stop listener first — HackRF can only do one thing at a time
         if listener.is_running():
             listener.stop()
 
@@ -322,7 +309,7 @@ elif menu == "Satellite Weather":
         ):
             samples, iq_path, error = sdr.capture_iq(
                 freq_hz, sr_hz, record_sec, bw_hz,
-                lna_gain=lna_gain, vga_gain=vga_gain, amp_on=amp_on,
+                rx_gain=rx_gain,
             )
 
         if error:
@@ -351,12 +338,12 @@ elif menu == "Satellite Weather":
             if mode in ("FM", "AM"):
                 st.write(f"**{mode} demodulated audio**")
                 if mode == "FM":
-                    audio = sdr.demod_fm(samples, sr_hz)
+                    audio = sdr.demod_fm(samples, sr_hz, bw_hz)
                 else:
-                    audio = sdr.demod_am(samples, sr_hz)
+                    audio = sdr.demod_am(samples, sr_hz, bw_hz)
 
                 wav_path = os.path.join(tempfile.gettempdir(),
-                                        "hackrf_audio.wav")
+                                        "pluto_audio.wav")
                 sdr.save_wav(audio, wav_path)
                 st.audio(wav_path, format="audio/wav")
 
