@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-CSV_FILE = "weather_data.csv"
+CSV_FILE = "data/weather_data.csv"
 COLUMNS = ["Date", "Temperature_C", "Condition", "Humidity_%", "Wind_Speed_kmh"]
 DATE_FORMAT = "%d-%m-%Y"
 
@@ -81,7 +81,7 @@ def _with_datetime(df):
     return df.dropna(subset=["Date_dt"])
 
 
-# ── Core features ────────────────────────────────────────────────
+#  Core features 
 
 def get_statistics(df):
     if df.empty:
@@ -102,7 +102,7 @@ def search_by_date(df, date_str):
     return df[df["Date"] == date_str]
 
 
-# ── Month / season filtering ────────────────────────────────────
+#  Month / season filtering 
 
 def get_season(month):
     if month in (12, 1, 2):
@@ -132,7 +132,7 @@ def get_available_years(df):
     return sorted(dfd["Date_dt"].dt.year.unique().tolist())
 
 
-# ── Text-based trend graph ──────────────────────────────────────
+#  Text-based trend graph 
 
 def generate_text_trend(df, n=10):
     dfd = _with_datetime(df).sort_values("Date_dt")
@@ -149,7 +149,7 @@ def generate_text_trend(df, n=10):
     return "\n".join(lines)
 
 
-# ── Tomorrow's weather prediction ──────────────────────────────
+#  Tomorrow's weather prediction
 
 def predict_tomorrow(df):
     dfd = _with_datetime(df)
@@ -169,7 +169,7 @@ def predict_tomorrow(df):
     }
 
 
-# ── Year-over-year comparison ──────────────────────────────────
+#  Year-over-year comparison 
 
 def compare_years(df, year1, year2):
     dfd = _with_datetime(df)
@@ -185,7 +185,7 @@ def compare_years(df, year1, year2):
     return comparison.round(2)
 
 
-# ── Record-breaking weather ────────────────────────────────────
+#  Record-breaking weather 
 
 def get_records(df):
     if df.empty:

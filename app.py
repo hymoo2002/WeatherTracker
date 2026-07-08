@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
-import sdr_f as sdr
-import weather_f as wf
+from functions import sdr_f as sdr
+from functions import weather_f as wf
 
 st.set_page_config(page_title="Weather Tracker", layout="centered")
 st.title("🌦️ Weather Tracker")
