@@ -13,7 +13,7 @@ I built this while learning Python, so the code is straightforward and easy to f
 * **Year comparison** — side-by-side monthly averages between two years
 * **Tomorrow's prediction** — simple forecast based on same-month history
 * **Record-breaking weather** — hottest, coldest, most humid, windiest days
-* **Satellite Weather (SDR)** — tune into weather satellites with a HackRF One, listen live or record IQ files for decoding in SatDump
+* **Satellite Weather (SDR)** — tune into weather satellites with an SDR (PLUTO or equivalent), listen live or record IQ files for decoding in SatDump
 
 ## Requirements
 
@@ -32,11 +32,11 @@ pip install streamlit pandas numpy scipy matplotlib sounddevice
 streamlit run app.py
 ```
 
-The app saves observations to `weather\_data.csv` in the same folder. Dates use DD-MM-YYYY format.
+The app saves observations to `weather_data.csv` in the same folder. Dates use DD-MM-YYYY format.
 
 ## SDR Section
 
-The Satellite Weather page lets you connect a HackRF One and:
+The Satellite Weather page lets you connect an SDR and:
 
 * **Listen** continuously to FM/AM signals through your speakers (like SDR#)
 * **Record** IQ captures for offline decoding
@@ -48,8 +48,8 @@ Comes with built-in presets for NOAA APT, Meteor LRPT, MetOp, GOES, FengYun, AIS
 |File|What it does|
 |-|-|
 |`app.py`|Streamlit UI — all the pages and layout|
-|`weather\_f.py`|Weather data functions — stats, filters, predictions|
-|`sdr\_f.py`|SDR receiver functions — capture, demodulation, live listener|
+|`weather_f.py`|Weather data functions — stats, filters, predictions|
+|`sdr_f.py`|SDR receiver functions — capture, demodulation, live listener|
 
 ## Deployed App Link
 
