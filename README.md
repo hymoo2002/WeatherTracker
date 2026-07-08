@@ -18,7 +18,7 @@ I built this while learning Python, so the code is straightforward and easy to f
 ## Requirements
 
 * Python 3.9+
-* HackRF One + hackrf tools (only for the SDR section)
+* Pluto SDR, or any equivalent (only for the SDR section)
 
 ## Setup
 
@@ -32,7 +32,7 @@ pip install streamlit pandas numpy scipy matplotlib sounddevice
 streamlit run app.py
 ```
 
-The app saves observations to `weather\_data.csv` in the same folder. Dates use DD-MM-YYYY format.
+The app saves observations to `weather\\\\\\\_data.csv` in the same folder. Dates use DD-MM-YYYY format.
 
 ## SDR Section
 
@@ -48,10 +48,14 @@ Comes with built-in presets for NOAA APT, Meteor LRPT, MetOp, GOES, FengYun, AIS
 |File|What it does|
 |-|-|
 |`app.py`|Streamlit UI — all the pages and layout|
-|`weather\_f.py`|Weather data functions — stats, filters, predictions|
-|`sdr\_f.py`|SDR receiver functions — capture, demodulation, live listener|
+|`weather\\\\\\\_f.py`|Weather data functions — stats, filters, predictions|
+|`sdr\\\\\\\_f.py`|SDR receiver functions — capture, demodulation, live listener|
 
 ## Deployed App Link
 
 https://weathertracker2002.streamlit.app/
+
+## Overview Video
+
+https://youtu.be/zbPYGdtrmVs
 
